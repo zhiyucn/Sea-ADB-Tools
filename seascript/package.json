@@ -1,0 +1,25 @@
+{
+  "name": "seascript",
+  "displayName": "SeaScript",
+  "description": "",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [{
+      "id": "sea",
+      "aliases": ["SeaScript", "sea"],
+      "extensions": [".sea"],
+      "configuration": "./language-configuration.json"
+    }],
+    "grammars": [{
+      "language": "sea",
+      "scopeName": "",
+      "path": "./syntaxes/sea.tmLanguage.json"
+    }]
+  }
+}

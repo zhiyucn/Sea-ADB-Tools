@@ -1,0 +1,28 @@
+{
+    "scopeName": "source.sea",
+    "fileTypes": ["sea"],
+    "name": "SeaScript",
+    "patterns": [
+        {
+            "name": "keyword.control.sea",
+            "match": "\\b(if|endif|loop|endloop|set|device)\\b"
+        },
+        {
+            "name": "comment.line.sea",
+            "match": "#.*$"
+        },
+        {
+            "name": "string.quoted.double.sea",
+            "match": "\".*?\""
+        },
+        {
+            "name": "variable.other.sea",
+            "match": "\\$\\{[^}]+\\}"
+        },
+        {
+            "name": "constant.numeric.sea",
+            "match": "\\b\\d+\\b"
+        }
+    ],
+    "repository": {}
+}

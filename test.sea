@@ -1,0 +1,9 @@
+  # 这是一个注释
+  set myVar 123
+  if ${myVar} == 123
+      device emulator-5554
+      loop 3
+          echo "Hello, SeaScript!"
+      endloop
+  endif
+  
