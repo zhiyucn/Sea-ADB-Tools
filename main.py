@@ -3,16 +3,10 @@ import subprocess
 import os
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton,
-    QTextEdit, QLabel, QComboBox, QFileDialog, QMessageBox, QInputDialog
+    QTextEdit, QLabel, QComboBox, QFileDialog, QMessageBox, QInputDialog, QListWidget
 )
 from PySide6.QtCore import QThread, Signal
-
-import qfluentwidgets
-
-QPushButton = qfluentwidgets.PushButton
-QComboBox = qfluentwidgets.ComboBox
-QLineEdit = qfluentwidgets.LineEdit
-QTextEdit = qfluentwidgets.TextEdit
+from qt_material import apply_stylesheet
 
 
 class ADBCommandThread(QThread):
@@ -27,10 +21,19 @@ class ADBCommandThread(QThread):
         try:
             # 使用相对路径
             adb_path = os.path.join(os.path.dirname(__file__), 'adb', 'adb.exe')  # 假设 adb.exe 在 adb 子目录
-            subprocess.run(f"{adb_path} {self.command}", shell=True, check=True, stdout=subprocess.PIPE, universal_newlines=True, encoding='utf-8')
-            self.command_output.emit("命令执行成功！")
+            result = subprocess.run(
+                f"{adb_path} {self.command}",
+                shell=True,
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                encoding='utf-8',  # 显式指定编码为 utf-8
+                errors='ignore'    # 忽略无法解码的字符
+            )
+            self.command_output.emit(result.stdout)  # 发送命令输出
         except Exception as e:
             self.command_output.emit(f"执行命令时出错: {str(e)}")
+
 
 class FastbootCommandThread(QThread):
     """用于在后台执行Fastboot命令的线程"""
@@ -44,10 +47,19 @@ class FastbootCommandThread(QThread):
         try:
             # 使用相对路径
             fastboot_path = os.path.join(os.path.dirname(__file__), 'adb', 'fastboot.exe')  # 假设 fastboot.exe 在 adb 子目录
-            subprocess.run(f"{fastboot_path} {self.command}", shell=True, check=True, stdout=subprocess.PIPE, universal_newlines=True, encoding='utf-8')
-            self.command_output.emit("命令执行成功！")
+            result = subprocess.run(
+                f"{fastboot_path} {self.command}",
+                shell=True,
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                encoding='utf-8',  # 显式指定编码为 utf-8
+                errors='ignore'    # 忽略无法解码的字符
+            )
+            self.command_output.emit(result.stdout)  # 发送命令输出
         except Exception as e:
             self.command_output.emit(f"执行命令时出错: {str(e)}")
+
 
 class SeaScript:
     def __init__(self, device=None):
@@ -91,6 +103,10 @@ class SeaScript:
                 self.device = line.split(' ')[1]
                 continue
 
+            if line.startswith('echo'):
+                self.output_display.append(line[4:].strip() + '\n')
+                print(line[4:].strip())
+                QMessageBox.information(self, 'lication', line[4:].strip())
             if line.startswith('set'):
                 parts = line.split(' ')
                 if len(parts) >= 3:
@@ -130,6 +146,113 @@ class SeaScript:
         return line
 
 
+class FileManager(QWidget):
+    def __init__(self, device):
+        super().__init__()
+        self.device = device
+        self.initUI()
+
+    def initUI(self):
+        self.setWindowTitle('文件管理器')
+        self.setGeometry(100, 100, 600, 400)
+
+        layout = QVBoxLayout()
+
+        # 路径显示
+        self.path_label = QLabel('当前路径: /sdcard')
+        layout.addWidget(self.path_label)
+
+        # 文件列表
+        self.file_list = QListWidget()
+        self.file_list.itemDoubleClicked.connect(self.navigate_to)
+        layout.addWidget(self.file_list)
+
+        # 返回上一级按钮
+        self.back_button = QPushButton('返回上一级')
+        self.back_button.clicked.connect(self.navigate_up)
+        layout.addWidget(self.back_button)
+
+        self.setLayout(layout)
+        self.current_path = '/sdcard'
+        self.refresh_file_list()
+
+    def refresh_file_list(self):
+        """刷新文件列表"""
+        self.file_list.clear()
+        try:
+            adb_path = os.path.join(os.path.dirname(__file__), 'adb', 'adb.exe')
+            result = subprocess.run(
+                [adb_path, '-s', self.device, 'shell', 'ls', '-1', self.current_path],
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='ignore'
+            )
+            files = result.stdout.splitlines()
+            for file in files:
+                if file:  # 确保文件名不为空
+                    self.file_list.addItem(file)
+        except Exception as e:
+            QMessageBox.warning(self, '错误', f"无法获取文件列表: {str(e)}")
+
+    def navigate_to(self, item):
+        """导航到选定的目录或处理文件打开"""
+        selected_item = item.text()
+        new_path = self.current_path + '/' + selected_item  # 使用字符串拼接
+
+        try:
+            adb_path = os.path.join(os.path.dirname(__file__), 'adb', 'adb.exe')
+            # 使用 cat 命令检查是否为文件，并设置超时
+            try:
+                result = subprocess.run(
+                    [adb_path, '-s', self.device, 'shell', 'cat', new_path],
+                    capture_output=True,
+                    text=True,
+                    encoding='utf-8',
+                    errors='ignore',
+                    timeout=2  # 设置超时为 2 秒
+                )
+                if "cat:" in result.stdout:  # 如果是目录
+                    self.current_path = new_path
+                    self.path_label.setText(f'当前路径: {self.current_path}')
+                    self.refresh_file_list()
+                elif result.returncode == 0:  # 如果是文件
+                    self.save_file(new_path, selected_item)
+            except subprocess.TimeoutExpired:  # 如果超时，直接认为是文件
+                self.save_file(new_path, selected_item)
+        except Exception as e:
+            QMessageBox.warning(self, '错误', f"无法导航到路径: {str(e)}")
+
+    def save_file(self, remote_path, file_name):
+        """保存文件到本地"""
+        save_directory = QFileDialog.getExistingDirectory(self, "选择保存目录")
+        if save_directory:
+            save_path = os.path.join(save_directory, file_name)
+            try:
+                adb_path = os.path.join(os.path.dirname(__file__), 'adb', 'adb.exe')
+                # 使用 adb pull 命令将文件从设备复制到本地
+                subprocess.run(
+                    [adb_path, '-s', self.device, 'pull', remote_path, save_path],
+                    capture_output=True,
+                    text=True,
+                    encoding='utf-8',
+                    errors='ignore'
+                )
+                QMessageBox.information(self, '提示', f'文件已保存到: {save_path}')
+            except Exception as e:
+                QMessageBox.warning(self, '错误', f"无法保存文件: {str(e)}")
+
+    def navigate_up(self):
+        """返回上一级目录"""
+        if self.current_path != '/':
+            self.current_path = '/'.join(self.current_path.split('/')[:-1])  # 直接使用字符串操作
+            if self.current_path == '':  # 如果路径为空，设置为根目录
+                self.current_path = '/'
+            self.path_label.setText(f'当前路径: {self.current_path}')
+            self.refresh_file_list()
+
+
+
 class ADBTool(QWidget):
     def __init__(self):
         super().__init__()
@@ -139,14 +262,18 @@ class ADBTool(QWidget):
         self.refresh_devices()  # 初始化时刷新设备列表
 
     def initUI(self):
+        self.setStyleSheet("font-family: Microsoft YaHei;")
         self.setWindowTitle('SeaADBTools 年轻人的第一款GUI的ADB工具')
         self.setGeometry(100, 100, 800, 600)
 
         # 主布局
         layout = QVBoxLayout()
-        self.ADB_label = QLabel('————ADB专区————')
-        self.ADB_label.setStyleSheet('font-size: 20px; font-weight: bold;')
-        layout.addWidget(self.ADB_label)
+
+        # 左上角设置按钮
+        self.settings_button = QPushButton('设置')
+        self.settings_button.clicked.connect(self.show_settings)
+        layout.addWidget(self.settings_button)
+
         # 设备选择部分
         device_layout = QHBoxLayout()
         self.device_label = QLabel('选择设备:')
@@ -158,6 +285,15 @@ class ADBTool(QWidget):
         device_layout.addWidget(self.refresh_button)
         layout.addLayout(device_layout)
 
+        # 添加获取设备信息按钮
+        self.device_info_button = QPushButton('获取设备信息')
+        self.device_info_button.clicked.connect(self.get_device_info)
+        layout.addWidget(self.device_info_button)
+
+        self.ADB_label = QLabel('————ADB专区————')
+        self.ADB_label.setStyleSheet('font-size: 20px; font-weight: bold;')
+        layout.addWidget(self.ADB_label)
+
         # 常用命令按钮
         command_button_layout = QHBoxLayout()
         self.reboot_button = QPushButton('重启设备')
@@ -166,9 +302,13 @@ class ADBTool(QWidget):
         self.screenshot_button.clicked.connect(self.take_screenshot)
         self.install_button = QPushButton('安装APK')
         self.install_button.clicked.connect(self.install_apk)
+        self.file_manager_button = QPushButton('文件管理')
+        self.file_manager_button.clicked.connect(self.open_file_manager)
+
         command_button_layout.addWidget(self.reboot_button)
         command_button_layout.addWidget(self.screenshot_button)
         command_button_layout.addWidget(self.install_button)
+        command_button_layout.addWidget(self.file_manager_button)
         layout.addLayout(command_button_layout)
 
         # 自定义命令输入
@@ -217,7 +357,9 @@ class ADBTool(QWidget):
             result = subprocess.run(
                 [adb_path, 'devices'],
                 capture_output=True,
-                text=True
+                text=True,
+                encoding='utf-8',  # 显式指定编码为 utf-8
+                errors='ignore'    # 忽略无法解码的字符
             )
             output = result.stdout
             devices = [line.split()[0] for line in output.splitlines() if 'device' in line and not 'offline' in line and not 'List' in line]
@@ -277,20 +419,19 @@ class ADBTool(QWidget):
         self.current_thread = FastbootCommandThread(command)
         self.current_thread.command_output.connect(self.output_display.append)
         self.current_thread.start()
+
     def take_screenshot(self):
         """截图功能"""
         device = self.get_selected_device()
         if not device:
             QMessageBox.warning(self, '错误', '请先选择一个设备！')
             return
-        # sh
+
         file_path, _ = QFileDialog.getSaveFileName(self, '保存截图', '', 'PNG Files (*.png)')
         if file_path:
             try:
                 adb_path = os.path.join(os.path.dirname(__file__), 'adb', 'adb.exe')  # 假设 adb.exe 在 adb 子目录
                 subprocess.run(f"{adb_path} -s {device} shell mkdir -p /sdcard/SeaADBTools/temp/screenshot", shell=True, check=True)
-            
-                
                 subprocess.run(f"{adb_path} -s {device} shell screencap -p /sdcard/SeaADBTools/temp/screenshot/screenshot.png", shell=True, check=True)
                 subprocess.run(f"{adb_path} -s {device} pull /sdcard/SeaADBTools/temp/screenshot/screenshot.png {file_path}", shell=True, check=True)
                 QMessageBox.information(self, '提示', '截图已保存到' + file_path)
@@ -312,7 +453,7 @@ class ADBTool(QWidget):
         """清理 SeaADBTools 临时文件"""
         try:
             adb_path = os.path.join(os.path.dirname(__file__), 'adb', 'adb.exe')
-            subprocess.run(f"{adb_path}" + " shell rm -rf /sdcard/SeaADBTools/temp", shell=True, check=True)
+            subprocess.run(f"{adb_path} shell rm -rf /sdcard/SeaADBTools/temp", shell=True, check=True)
         except subprocess.CalledProcessError:
             QMessageBox.warning(self, '错误', '清理临时文件失败，请检查设备连接状态。')
 
@@ -347,9 +488,9 @@ class ADBTool(QWidget):
 
         file_path, _ = QFileDialog.getOpenFileName(self, '选择镜像文件', '', 'Image Files (*.img)')
         if file_path:
-            partition = QInputDialog.getText(self, '选择分区', '请输入要刷入的分区（如 boot, recovery, system 等）：')
-            if partition[1]:
-                self.run_command_in_thread(f"-s {device} flash {partition[0]} {file_path}")
+            partition, ok = QInputDialog.getText(self, '选择分区', '请输入要刷入的分区（如 boot, recovery, system 等）：')
+            if ok and partition:
+                self.run_command_in_thread(f"-s {device} flash {partition} {file_path}")
 
     def unlock_bootloader(self):
         """解锁Bootloader"""
@@ -360,9 +501,112 @@ class ADBTool(QWidget):
 
         self.run_fastboot_command('oem unlock')
 
+    def get_device_info(self):
+        """获取设备信息并格式化输出"""
+        device = self.get_selected_device()
+        if not device:
+            QMessageBox.warning(self, '错误', '请先选择一个设备！')
+            return
+
+        try:
+            adb_path = os.path.join(os.path.dirname(__file__), 'adb', 'adb.exe')  # 假设 adb.exe 在 adb 子目录
+            # 获取设备型号
+            model = subprocess.run(
+                [adb_path, '-s', device, 'shell', 'getprop', 'ro.product.model'],
+                capture_output=True,
+                text=True,
+                encoding='utf-8',  # 显式指定编码为 utf-8
+                errors='ignore'    # 忽略无法解码的字符
+            ).stdout.strip()
+
+            # 获取设备品牌
+            brand = subprocess.run(
+                [adb_path, '-s', device, 'shell', 'getprop', 'ro.product.brand'],
+                capture_output=True,
+                text=True,
+                encoding='utf-8',  # 显式指定编码为 utf-8
+                errors='ignore'    # 忽略无法解码的字符
+            ).stdout.strip()
+
+            # 获取设备系统版本
+            version = subprocess.run(
+                [adb_path, '-s', device, 'shell', 'getprop', 'ro.build.version.release'],
+                capture_output=True,
+                text=True,
+                encoding='utf-8',  # 显式指定编码为 utf-8
+                errors='ignore'    # 忽略无法解码的字符
+            ).stdout.strip()
+
+            # 获取设备序列号
+            serial = subprocess.run(
+                [adb_path, '-s', device, 'shell', 'getprop', 'ro.serialno'],
+                capture_output=True,
+                text=True,
+                encoding='utf-8',  # 显式指定编码为 utf-8
+                errors='ignore'    # 忽略无法解码的字符
+            ).stdout.strip()
+
+            # 格式化输出
+            info = f"""
+设备型号: {model}
+设备品牌: {brand}
+系统版本: Android {version}
+设备序列号: {serial}
+            """
+            self.output_display.append(info)
+        except Exception as e:
+            self.output_display.append(f"获取设备信息时出错: {str(e)}")
+
+    def open_file_manager(self):
+        """打开文件管理器"""
+        device = self.get_selected_device()
+        if not device:
+            QMessageBox.warning(self, '错误', '请先选择一个设备！')
+            return
+
+        self.file_manager_window = FileManager(device)
+        self.file_manager_window.show()
+
+    def show_settings(self):
+        """显示设置窗口"""
+        self.settings_window = Settings()  # 将主窗口作为父窗口传递
+        self.settings_window.show()
+
+
+class Settings(QWidget):
+    def __init__(self):
+        super().__init__()  # 不传递 parent 参数
+        self.initUI()
+
+    def initUI(self):
+        self.setWindowTitle('设置')
+        self.setGeometry(100, 100, 300, 200)
+        layout = QVBoxLayout()
+
+        self.theme_label = QLabel('主题:')
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItems(['light_blue.xml', 'dark_blue.xml', 'light_red.xml', 'dark_red.xml'])
+        layout.addWidget(self.theme_label)
+        layout.addWidget(self.theme_combo)
+
+        # 添加应用主题按钮
+        self.apply_button = QPushButton('应用主题')
+        self.apply_button.clicked.connect(self.setthemes)
+
+        layout.addWidget(self.apply_button)
+
+        self.setLayout(layout)
+
+    def setthemes(self):
+        """设置主题"""
+        theme = self.theme_combo.currentText()
+        apply_stylesheet(app, theme=theme)  # 切换主题
+        # self.close()  # 应用主题后关闭设置窗口
+
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
+    apply_stylesheet(app, theme='light_blue.xml')  # 切换主题
     ex = ADBTool()
     ex.show()
     sys.exit(app.exec())
